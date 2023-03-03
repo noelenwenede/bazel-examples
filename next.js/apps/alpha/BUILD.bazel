@@ -33,6 +33,7 @@ next(
         "//:node_modules/typescript",
     ],
     next_bin = "../../node_modules/.bin/next",
+    next_build_out = ".next",
     next_js_binary = "//:next_js_binary",
 )
 

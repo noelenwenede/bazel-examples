@@ -1,4 +1,8 @@
-load("@aspect_rules_js//js:defs.bzl", "js_run_binary", "js_run_devserver")
+load("@aspect_rules_js//js:defs.bzl", "js_binary", "js_image_layer", "js_run_binary", "js_run_devserver")
+load("@aspect_bazel_lib//lib:run_binary.bzl", "run_binary")
+load("@contrib_rules_oci//oci:defs.bzl", "oci_image")
+load("@contrib_rules_oci//oci/private:tarball.bzl", "oci_tarball")
+load("@aspect_bazel_lib//lib:transitions.bzl", "platform_transition_filegroup")
 
 def next(
         name,
@@ -144,6 +148,20 @@ def next(
         **kwargs
     )
 
+    js_run_binary(
+        name = "build",
+        tool = next_js_binary,
+        args = ["build"],
+        srcs = srcs + data,
+        out_dirs = [next_build_out],
+        chdir = native.package_name(),
+        tags = tags,
+        execution_requirements = {
+            "no-sandbox": "1",
+        },
+        **kwargs
+    )
+
     # `next dev` runs the application in development mode
     # https://nextjs.org/docs/api-reference/cli#development
     js_run_devserver(
@@ -182,4 +200,78 @@ def next(
         # TODO: fix in Next.js (https://github.com/vercel/next.js/issues/43344) or find work-around.
         tags = tags + ["manual"],
         **kwargs
+    )
+
+    native.sh_binary(
+        name = "generate_dist_bin",
+        srcs = ["generate_dist.sh"],
+    )
+
+    run_binary(
+        name = "generate_dist",
+        srcs = [
+            ":build",
+            "//{}/public".format(native.package_name()),
+        ],
+        outs = [
+            # "dist/package.json",
+            "dist/server.js",
+        ],
+        args = [
+            "$(location :build)",
+            "$(location :build)/../public",
+            "$(@D)/dist",
+        ],
+        out_dirs = [
+            "dist/.next",
+            "dist/public",
+        ],
+        tool = "generate_dist_bin",
+    )
+
+    js_binary(
+        name = "bin",
+        chdir = "{}/dist".format(native.package_name()),
+        copy_data_to_bin = False,
+        data = [":generate_dist"],
+        entry_point = "dist/server.js",
+    )
+
+    native.platform(
+        name = "amd64_linux",
+        constraint_values = [
+            "@platforms//os:linux",
+            "@platforms//cpu:x86_64",
+        ],
+    )
+
+    js_image_layer(
+        name = "layers",
+        binary = ":bin",
+        platform = ":amd64_linux",
+        root = "/app",
+    )
+
+    platform_transition_filegroup(
+        name = "transitioned_layers",
+        srcs = [":layers"],
+        target_platform = ":amd64_linux",
+    )
+
+    oci_image(
+        name = "{}_image".format(name),
+        cmd = ["/app/apps/alpha/bin"],
+        entrypoint = ["bash"],
+        tars = [":transitioned_layers"],
+        base = "@debian_amd64//:image",
+        architecture = select({
+            "@platforms//cpu:arm64": "arm64",
+            "@platforms//cpu:x86_64": "amd64",
+        }),
+    )
+
+    oci_tarball(
+        name = "{}_tarball".format(name),
+        image = "{}_image".format(name),
+        repotags = ["nextjs/js:latest"],
     )
