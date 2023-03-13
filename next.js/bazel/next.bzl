@@ -233,7 +233,11 @@ def next(
         name = "bin",
         chdir = "{}/dist".format(native.package_name()),
         copy_data_to_bin = False,
-        data = [":generate_dist"],
+        data = [":generate_dist"] + [
+            "//:node_modules/next",
+            "//:node_modules/react",
+            "//:node_modules/react-dom",
+        ],
         entry_point = "dist/server.js",
     )
 
@@ -245,17 +249,31 @@ def next(
         ],
     )
 
+    native.platform(
+        name = "arm64_linux",
+        constraint_values = [
+            "@platforms//os:linux",
+            "@platforms//cpu:arm64",
+        ],
+    )
+
     js_image_layer(
         name = "layers",
         binary = ":bin",
-        platform = ":amd64_linux",
+        platform = select({
+            "@platforms//cpu:arm64": "linux_arm64",
+            "@platforms//cpu:x86_64": "linux_amd64",
+        }),
         root = "/app",
     )
 
     platform_transition_filegroup(
         name = "transitioned_layers",
         srcs = [":layers"],
-        target_platform = ":amd64_linux",
+        target_platform = select({
+            "@platforms//cpu:arm64": "linux_arm64",
+            "@platforms//cpu:x86_64": "linux_amd64",
+        }),
     )
 
     oci_image(
@@ -268,6 +286,7 @@ def next(
             "@platforms//cpu:arm64": "arm64",
             "@platforms//cpu:x86_64": "amd64",
         }),
+        workdir = "/app/{}/bin.runfiles/__main__".format(native.package_name()),
     )
 
     oci_tarball(
